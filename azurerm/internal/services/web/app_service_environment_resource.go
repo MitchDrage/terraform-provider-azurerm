@@ -87,24 +87,30 @@ func resourceAppServiceEnvironment() *schema.Resource {
 				ValidateFunc: validation.IntBetween(5, 15),
 			},
 
-			// TODO - Not allowed in V3
+			// TODO - Not allowed in V3, but a value is returned
 			"pricing_tier": {
 				Type:     schema.TypeString,
 				Optional: true,
-				Default:  "I1",
+				Computed: true,
 				ValidateFunc: validation.StringInSlice([]string{
 					"I1",
 					"I2",
 					"I3",
 				}, false),
+				ConflictsWith: []string{
+					"version",
+				},
 			},
 
 			// TODO - Not allowed in V3
 			"allowed_user_ip_cidrs": {
-				Type:          schema.TypeSet,
-				Optional:      true,
-				Computed:      true, // remove in 3.0
-				ConflictsWith: []string{"user_whitelisted_ip_ranges"},
+				Type:     schema.TypeSet,
+				Optional: true,
+				Computed: true, // remove in 3.0
+				ConflictsWith: []string{
+					"user_whitelisted_ip_ranges",
+					"version",
+				},
 				Elem: &schema.Schema{
 					Type:         schema.TypeString,
 					ValidateFunc: helpersValidate.CIDR,
@@ -113,11 +119,14 @@ func resourceAppServiceEnvironment() *schema.Resource {
 
 			// TODO - Not allowed in V3
 			"user_whitelisted_ip_ranges": {
-				Type:          schema.TypeSet,
-				Optional:      true,
-				Computed:      true, // remove in 3.0
-				ConflictsWith: []string{"allowed_user_ip_cidrs"},
-				Deprecated:    "this property has been renamed to `allowed_user_ip_cidrs` better reflect the expected ip range format",
+				Type:     schema.TypeSet,
+				Optional: true,
+				Computed: true, // remove in 3.0
+				ConflictsWith: []string{
+					"allowed_user_ip_cidrs",
+					"version",
+				},
+				Deprecated: "this property has been renamed to `allowed_user_ip_cidrs` better reflect the expected ip range format",
 				Elem: &schema.Schema{
 					Type:         schema.TypeString,
 					ValidateFunc: helpersValidate.CIDR,
@@ -125,14 +134,19 @@ func resourceAppServiceEnvironment() *schema.Resource {
 			},
 
 			"version": {
-				Type: schema.TypeString,
+				Type:     schema.TypeString,
 				Optional: true,
 				ForceNew: true,
-				Default: "ASEV2",
+				Default:  "ASEV2",
 				ValidateFunc: validation.StringInSlice([]string{
-						"ASEV2",
-						"ASEV3",
-					}, false),
+					"ASEV2",
+					"ASEV3",
+				}, false),
+				ConflictsWith: []string{
+					"pricing_tier",
+					"allowed_user_ip_cidrs",
+					"user_whitelisted_ip_ranges",
+				},
 			},
 
 			// TODO in 3.0 Make it "Required"
@@ -182,7 +196,7 @@ func resourceAppServiceEnvironmentCreate(d *schema.ResourceData, meta interface{
 
 	vnet, err := networksClient.Get(ctx, subnet.ResourceGroup, subnet.VirtualNetworkName, "")
 	if err != nil {
-		return fmt.Errorf("Error retrieving Virtual Network %q (Resource Group %q): %+v", subnet.VirtualNetworkName, subnet.ResourceGroup, err)
+		return fmt.Errorf("retrieving Virtual Network %q (Resource Group %q): %+v", subnet.VirtualNetworkName, subnet.ResourceGroup, err)
 	}
 
 	// the App Service Environment has to be in the same location as the Virtual Network
@@ -190,13 +204,13 @@ func resourceAppServiceEnvironmentCreate(d *schema.ResourceData, meta interface{
 	if loc := vnet.Location; loc != nil {
 		location = azure.NormalizeLocation(*loc)
 	} else {
-		return fmt.Errorf("Error determining Location from Virtual Network %q (Resource Group %q): `location` was nil", subnet.VirtualNetworkName, subnet.ResourceGroup)
+		return fmt.Errorf("determining Location from Virtual Network %q (Resource Group %q): `location` was nil", subnet.VirtualNetworkName, subnet.ResourceGroup)
 	}
 
 	existing, err := client.Get(ctx, resourceGroup, name)
 	if err != nil {
 		if !utils.ResponseWasNotFound(existing.Response) {
-			return fmt.Errorf("Error checking for presence of existing App Service Environment %q (Resource Group %q): %s", name, resourceGroup, err)
+			return fmt.Errorf("checking for presence of existing App Service Environment %q (Resource Group %q): %s", name, resourceGroup, err)
 		}
 	}
 
@@ -207,6 +221,9 @@ func resourceAppServiceEnvironmentCreate(d *schema.ResourceData, meta interface{
 	frontEndScaleFactor := d.Get("front_end_scale_factor").(int)
 	pricingTier := d.Get("pricing_tier").(string)
 	kind := d.Get("version").(string)
+	if kind == "ASEV2" && pricingTier == "" {
+		pricingTier = "I1"
+	}
 
 	envelope := web.AppServiceEnvironmentResource{
 		Location: utils.String(location),
@@ -234,7 +251,7 @@ func resourceAppServiceEnvironmentCreate(d *schema.ResourceData, meta interface{
 
 	// whilst this returns a future go-autorest has a max number of retries
 	if _, err := client.CreateOrUpdate(ctx, resourceGroup, name, envelope); err != nil {
-		return fmt.Errorf("Error creating App Service Environment %q (Resource Group %q): %+v", name, resourceGroup, err)
+		return fmt.Errorf("creating App Service Environment %q (Resource Group %q): %+v", name, resourceGroup, err)
 	}
 
 	createWait := resource.StateChangeConf{
@@ -256,7 +273,7 @@ func resourceAppServiceEnvironmentCreate(d *schema.ResourceData, meta interface{
 
 	read, err := client.Get(ctx, resourceGroup, name)
 	if err != nil {
-		return fmt.Errorf("Error retrieving App Service Environment %q (Resource Group %q): %+v", name, resourceGroup, err)
+		return fmt.Errorf("retrieving App Service Environment %q (Resource Group %q): %+v", name, resourceGroup, err)
 	}
 
 	d.SetId(*read.ID)
@@ -303,7 +320,7 @@ func resourceAppServiceEnvironmentUpdate(d *schema.ResourceData, meta interface{
 	}
 
 	if _, err := client.Update(ctx, id.ResourceGroup, id.HostingEnvironmentName, e); err != nil {
-		return fmt.Errorf("Error updating App Service Environment %q (Resource Group %q): %+v", id.HostingEnvironmentName, id.ResourceGroup, err)
+		return fmt.Errorf("updating App Service Environment %q (Resource Group %q): %+v", id.HostingEnvironmentName, id.ResourceGroup, err)
 	}
 
 	updateWait := resource.StateChangeConf{
@@ -319,7 +336,7 @@ func resourceAppServiceEnvironmentUpdate(d *schema.ResourceData, meta interface{
 	}
 
 	if _, err := updateWait.WaitForState(); err != nil {
-		return fmt.Errorf("Error waiting for Update of App Service Environment %q (Resource Group %q): %+v", id.HostingEnvironmentName, id.ResourceGroup, err)
+		return fmt.Errorf("waiting for Update of App Service Environment %q (Resource Group %q): %+v", id.HostingEnvironmentName, id.ResourceGroup, err)
 	}
 
 	return resourceAppServiceEnvironmentRead(d, meta)
@@ -342,7 +359,7 @@ func resourceAppServiceEnvironmentRead(d *schema.ResourceData, meta interface{})
 			d.SetId("")
 			return nil
 		}
-		return fmt.Errorf("Error retrieving App Service Environmment %q (Resource Group %q): %+v", id.HostingEnvironmentName, id.ResourceGroup, err)
+		return fmt.Errorf("retrieving App Service Environmment %q (Resource Group %q): %+v", id.HostingEnvironmentName, id.ResourceGroup, err)
 	}
 
 	d.Set("name", id.HostingEnvironmentName)
@@ -405,7 +422,7 @@ func resourceAppServiceEnvironmentDelete(d *schema.ResourceData, meta interface{
 			return nil
 		}
 
-		return fmt.Errorf("Error deleting App Service Environment %q (Resource Group %q): %+v", id.HostingEnvironmentName, id.ResourceGroup, err)
+		return fmt.Errorf("deleting App Service Environment %q (Resource Group %q): %+v", id.HostingEnvironmentName, id.ResourceGroup, err)
 	}
 
 	err = future.WaitForCompletionRef(ctx, client.Client)
@@ -414,7 +431,7 @@ func resourceAppServiceEnvironmentDelete(d *schema.ResourceData, meta interface{
 			return nil
 		}
 
-		return fmt.Errorf("Error waiting for deletion of App Service Environment %q (Resource Group %q): %+v", id.HostingEnvironmentName, id.ResourceGroup, err)
+		return fmt.Errorf("waiting for deletion of App Service Environment %q (Resource Group %q): %+v", id.HostingEnvironmentName, id.ResourceGroup, err)
 	}
 
 	return nil
